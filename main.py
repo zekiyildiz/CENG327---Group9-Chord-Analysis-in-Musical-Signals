@@ -7,10 +7,6 @@ import noisereduce as nr
 
 
 def identify_major_minor_chord(note_list):
-    """
-    Verilen nota listesine en uygun majör veya minör akor adını belirler.
-    - note_list: Liste halinde notalar (örneğin, ['C', 'E', 'G'])
-    """
     try:
         # music21 ile akor nesnesi oluştur
         c = chord.Chord(note_list)
@@ -27,9 +23,6 @@ def identify_major_minor_chord(note_list):
 
 
 def get_key_music21(y, sr):
-    """
-    Şarkının tonalitesini belirler.
-    """
     notes = ['C', 'C#', 'D', 'D#', 'E', 'F',
              'F#', 'G', 'G#', 'A', 'A#', 'B']
 
@@ -45,7 +38,7 @@ def get_key_music21(y, sr):
     notes_present = [notes[i] for i, energy in enumerate(chroma_mean) if energy > energy_threshold]
 
     # Çok fazla nota seçilmişse, sadece en yoğun birkaçını alarak süreci sadeleştirin
-    max_notes = 5  # İhtiyaca göre artırabilir veya azaltabilirsiniz
+    max_notes = 5  # İhtiyaca göre artırabilir veya azalt.
     if len(notes_present) > max_notes:
         # En yoğun notaları seçin
         sorted_notes = sorted(zip(notes_present, chroma_mean), key=lambda x: x[1], reverse=True)
@@ -159,22 +152,20 @@ plt.title(f'Waveform of "{file_path}"', fontsize=16)
 plt.xlabel('Time (s)', fontsize=14)
 plt.ylabel('Amplitude', fontsize=14)
 
-# Subplot 2: Chroma Spectrogram
-plt.subplot(3, 1, 2)
-librosa.display.specshow(chroma, x_axis='time', y_axis='chroma', cmap='coolwarm', sr=sr, hop_length=512)
-plt.colorbar(format='%+2.0f dB')
-plt.title('Chroma Spectrogram', fontsize=16)
 
-# Subplot 3: Chord Chromagram
-plt.subplot(3, 1, 3)
+# Subplot 2: Chord Chromagram
+plt.subplot(3, 1, 2)
 librosa.display.specshow(chord_chromagram, x_axis='time', y_axis='chroma', cmap='coolwarm', sr=sr, hop_length=512)
-plt.colorbar(format='%+2.0f dB')
+cbar = plt.colorbar()
+cbar.set_ticks([])
+cbar.set_label('Density', fontsize=16)
 plt.title('Chord Chromagram (Top 3 Notes per Second)', fontsize=16)
+
+
 
 plt.tight_layout()
 plt.show()
 
-# Sonuçları yazdır
 print("\nMost intense 3 notes overall:")
 print(top_3_notes)
 
