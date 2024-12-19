@@ -1,4 +1,5 @@
 import sys
+import os
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QPushButton, QVBoxLayout,
     QFileDialog, QMessageBox, QLabel
@@ -9,13 +10,14 @@ import librosa
 import numpy as np
 import librosa.display
 import matplotlib.pyplot as plt
+import csv
 from collections import Counter
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+
 
 # Define chord templates
 def get_chord_templates():
     notes = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
-
     major_intervals = [0, 4, 7]
     minor_intervals = [0, 3, 7]
 
@@ -31,6 +33,7 @@ def get_chord_templates():
             minor_template[(i + intv) % 12] = 1
         chords[f"{n}m"] = minor_template
     return chords
+
 
 # Chord detection function
 def chord_detection(chroma, smoothing_window):
@@ -69,6 +72,8 @@ class App(QWidget):
         self.top = 100
         self.width = 900
         self.height = 700
+        self.chord_changes = []
+        self.bpm = None
         self.initUI()
 
     def initUI(self):
@@ -86,19 +91,25 @@ class App(QWidget):
         self.music_label = QLabel("Music Name: --", self)
         music_font = QFont()
         music_font.setBold(True)
-        music_font.setPointSize(12)  # Adjust font size as needed
+        music_font.setPointSize(12)
         self.music_label.setFont(music_font)
-        self.music_label.setAlignment(Qt.AlignCenter)  # Center the text
+        self.music_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(self.music_label)
 
         # BPM Label
         self.bpm_label = QLabel("BPM: --", self)
         bpm_font = QFont()
         bpm_font.setBold(True)
-        bpm_font.setPointSize(12)  # Adjust font size as needed
+        bpm_font.setPointSize(12)
         self.bpm_label.setFont(bpm_font)
-        self.bpm_label.setAlignment(Qt.AlignCenter)  # Center the text
+        self.bpm_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(self.bpm_label)
+
+        # Export Chords Button
+        self.export_button = QPushButton('Export Chords', self)
+        self.export_button.setEnabled(False)
+        self.export_button.clicked.connect(self.export_chords)
+        layout.addWidget(self.export_button)
 
         # Matplotlib Canvas for Plotting
         self.canvas = FigureCanvas(plt.Figure(figsize=(10, 8)))
@@ -119,53 +130,8 @@ class App(QWidget):
         if fileName:
             self.process_audio(fileName)
 
-    def process_audio(self, file_path):
-        try:
-            import os
-            music_name = os.path.basename(file_path)
-            self.music_label.setText(f"Music Name: <b>{music_name}</b>")
-
-            # Load audio file
-            measurements, sample_rate = librosa.load(file_path, sr=44100, mono=True)
-
-            # Load again for BPM detection with original sample rate
-            a, b = librosa.load(file_path, sr=None)
-            bpm, _ = librosa.beat.beat_track(y=a, sr=b)
-            bpm = bpm.item() if isinstance(bpm, np.ndarray) else bpm
-            self.bpm_label.setText(f"BPM: <b>{int(bpm)}</b>")
-
-            # Chromagram Calculation
-            hop_length = 512
-            chroma = librosa.feature.chroma_cqt(y=measurements, sr=sample_rate, hop_length=hop_length)
-            chroma = chroma / (np.linalg.norm(chroma, axis=0, keepdims=True) + 1e-9)
-            chroma = np.apply_along_axis(
-                lambda x: np.convolve(x, np.ones(5) / 5, mode='same'),
-                axis=1,
-                arr=chroma
-            )
-            frames_per_second = sample_rate / hop_length
-            frames_per_beat = int(frames_per_second * (60.0 / bpm))
-            detected_chords = chord_detection(chroma, frames_per_beat)
-
-            # Time Conversion for Chords
-            times = librosa.frames_to_time(np.arange(chroma.shape[1]), sr=sample_rate)
-            chord_changes = []
-            if detected_chords:
-                current_chord = detected_chords[0]
-                start_time = times[0]
-                for i in range(1, len(detected_chords)):
-                    if detected_chords[i] != current_chord:
-                        end_time = times[i]
-                        chord_changes.append((current_chord, start_time, end_time))
-                        current_chord = detected_chords[i]
-                        start_time = times[i]
-                end_time = times[-1]
-                chord_changes.append((current_chord, start_time, end_time))
-
-            unique_chords = list(dict.fromkeys(detected_chords))
-            chord_to_y = {ch: i for i, ch in enumerate(unique_chords)}
-
-            # Clear the previous plot
+    def update_plots(self, measurements, sample_rate, chroma, chord_changes, unique_chords, chord_to_y):
+    # Clear the previous plot
             self.canvas.figure.clf()
 
             # Plot waveform
@@ -232,9 +198,88 @@ class App(QWidget):
             # Adjust layout
             self.canvas.figure.tight_layout()
             self.canvas.draw()
+            
+            
+    def process_audio(self, file_path):
+        try:
+            music_name = os.path.basename(file_path)
+            self.music_label.setText(f"Music Name: <b>{music_name}</b>")
+
+            # Load audio file
+            measurements, sample_rate = librosa.load(file_path, sr=44100, mono=True)
+            a, b = librosa.load(file_path, sr=None)
+            self.bpm, _ = librosa.beat.beat_track(y=a, sr=b)
+            self.bpm_label.setText(f"BPM: <b>{int(self.bpm)}</b>")
+
+            # Chromagram Calculation
+            hop_length = 512
+            chroma = librosa.feature.chroma_cqt(y=measurements, sr=sample_rate, hop_length=hop_length)
+            chroma = chroma / (np.linalg.norm(chroma, axis=0, keepdims=True) + 1e-9)
+            chroma = np.apply_along_axis(
+                lambda x: np.convolve(x, np.ones(5) / 5, mode='same'),
+                axis=1,
+                arr=chroma
+            )
+            frames_per_second = sample_rate / hop_length
+            frames_per_beat = int(frames_per_second * (60.0 / self.bpm))
+            detected_chords = chord_detection(chroma, frames_per_beat)
+
+            # Time Conversion for Chords
+            times = librosa.frames_to_time(np.arange(chroma.shape[1]), sr=sample_rate)
+            self.chord_changes = []
+            if detected_chords:
+                current_chord = detected_chords[0]
+                start_time = times[0]
+                for i in range(1, len(detected_chords)):
+                    if detected_chords[i] != current_chord:
+                        end_time = times[i]
+                        self.chord_changes.append((current_chord, start_time, end_time))
+                        current_chord = detected_chords[i]
+                        start_time = times[i]
+                end_time = times[-1]
+                self.chord_changes.append((current_chord, start_time, end_time))
+
+            # Update Plots
+            self.update_plots(measurements, sample_rate, chroma, self.chord_changes, 
+                              list(dict.fromkeys(detected_chords)), 
+                              {ch: i for i, ch in enumerate(list(dict.fromkeys(detected_chords)))})
+            self.export_button.setEnabled(True)
 
         except Exception as e:
             QMessageBox.critical(self, "Error", f"An error occurred: {e}")
+
+    def export_chords(self):
+        if not self.chord_changes:
+            QMessageBox.warning(self, "No Data", "No chord data to export. Please load and process a music file first.")
+            return
+
+        options = QFileDialog.Options()
+        save_file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save Chord Data",
+            "chords",
+            "CSV Files (*.csv);;Text Files (*.txt);;All Files (*)",
+            options=options
+        )
+
+        if save_file_path:
+            try:
+                ext = os.path.splitext(save_file_path)[1]
+                with open(save_file_path, mode='w', newline='') as file:
+                    if ext == ".csv":
+                        writer = csv.writer(file)
+                        writer.writerow([f"BPM: {int(self.bpm)}"])
+                        writer.writerow(["Start Time", "End Time", "Chord"])
+                        for chord, start, end in self.chord_changes:
+                            writer.writerow([start, end, chord])
+                    else:
+                        file.write(f"BPM: {int(self.bpm)}\n")
+                        for chord, start, end in self.chord_changes:
+                            file.write(f"{start} - {end}: {chord}\n")
+
+                QMessageBox.information(self, "Export Successful", f"Chord data saved to {save_file_path}")
+            except Exception as e:
+                QMessageBox.critical(self, "Error", f"An error occurred while exporting: {e}")
 
 
 # Run
