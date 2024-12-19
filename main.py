@@ -59,6 +59,7 @@ def chord_detection(chroma, smoothing_window):
 
     return detected_chords
 
+
 # Main Application Class
 class App(QWidget):
     def __init__(self):
@@ -120,7 +121,6 @@ class App(QWidget):
 
     def process_audio(self, file_path):
         try:
-            # Update Music Name Label
             import os
             music_name = os.path.basename(file_path)
             self.music_label.setText(f"Music Name: <b>{music_name}</b>")
@@ -131,11 +131,7 @@ class App(QWidget):
             # Load again for BPM detection with original sample rate
             a, b = librosa.load(file_path, sr=None)
             bpm, _ = librosa.beat.beat_track(y=a, sr=b)
-            if isinstance(bpm, np.ndarray):
-                bpm = bpm.item()
-            print("Estimated tempo (BPM):", bpm)
-
-            # Update BPM Label
+            bpm = bpm.item() if isinstance(bpm, np.ndarray) else bpm
             self.bpm_label.setText(f"BPM: <b>{int(bpm)}</b>")
 
             # Chromagram Calculation
@@ -151,10 +147,10 @@ class App(QWidget):
             frames_per_beat = int(frames_per_second * (60.0 / bpm))
             detected_chords = chord_detection(chroma, frames_per_beat)
 
-            # Time Conversion
+            # Time Conversion for Chords
             times = librosa.frames_to_time(np.arange(chroma.shape[1]), sr=sample_rate)
             chord_changes = []
-            if len(detected_chords) > 0:
+            if detected_chords:
                 current_chord = detected_chords[0]
                 start_time = times[0]
                 for i in range(1, len(detected_chords)):
@@ -172,41 +168,74 @@ class App(QWidget):
             # Clear the previous plot
             self.canvas.figure.clf()
 
+            # Plot waveform
+            ax1 = self.canvas.figure.add_subplot(3, 1, 1)
+            S = np.abs(librosa.stft(measurements, n_fft=8192, hop_length=128)) ** 2
+            frequencies = librosa.fft_frequencies(sr=sample_rate, n_fft=8192)
+
+            low_freq_range = (frequencies >= 20) & (frequencies < 250)
+            mid_freq_range = (frequencies >= 250) & (frequencies < 4000)
+            high_freq_range = (frequencies >= 4000)
+
+            low_energy = np.sum(S[low_freq_range, :], axis=0)
+            mid_energy = np.sum(S[mid_freq_range, :], axis=0)
+            high_energy = np.sum(S[high_freq_range, :], axis=0)
+
+            # Normalize energies
+            low_energy /= np.max(low_energy) if np.max(low_energy) > 0 else 1
+            mid_energy /= np.max(mid_energy) if np.max(mid_energy) > 0 else 1
+            high_energy /= np.max(high_energy) if np.max(high_energy) > 0 else 1
+
+            time = librosa.frames_to_time(np.arange(len(low_energy)), sr=sample_rate, hop_length=128)
+
+            ax1.plot(time, low_energy, color='red', alpha=0.8, label='Low Frequencies (Bass, Kick)')
+            ax1.plot(time, mid_energy, color='blue', alpha=0.8, label='Mid Frequencies (Melody, Vocal)')
+            ax1.plot(time, high_energy, color='green', alpha=0.8, label='High Frequencies (Cymbals, Atmosphere)')
+            ax1.plot(time, -low_energy, color='red', alpha=0.4)
+            ax1.plot(time, -mid_energy, color='blue', alpha=0.4)
+            ax1.plot(time, -high_energy, color='green', alpha=0.4)
+            ax1.set_xlabel('Time (s)')
+            ax1.set_ylabel('Normalized Amplitude')
+            ax1.set_title('RGB Waveform')
+            ax1.legend()
+
             # Plot Chromagram
-            ax1 = self.canvas.figure.add_subplot(2, 1, 1)
+            ax2 = self.canvas.figure.add_subplot(3, 1, 2, sharex=ax1)
             librosa.display.specshow(
                 chroma,
                 x_axis='time',
                 y_axis='chroma',
                 sr=sample_rate,
                 cmap='coolwarm',
-                ax=ax1
+                ax=ax2
             )
-            ax1.set_title('Chroma Representation')
-            ax1.set_yticks(np.arange(12))
-            ax1.set_yticklabels(['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'])
+            ax2.set_title('Chroma Representation')
+            ax2.set_yticks(np.arange(12))
+            ax2.set_yticklabels(['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'])
 
             # Plot Chord Segments
-            ax2 = self.canvas.figure.add_subplot(2, 1, 2, sharex=ax1)
+            ax3 = self.canvas.figure.add_subplot(3, 1, 3, sharex=ax1)
             cmap = plt.get_cmap('tab20')
             for chord, start, end in chord_changes:
                 y_pos = chord_to_y[chord]
                 duration = end - start
                 color = cmap(y_pos % cmap.N)
-                ax2.barh(y_pos, duration, left=start, height=0.6, color=color, edgecolor='black')
+                ax3.barh(y_pos, duration, left=start, height=0.6, color=color, edgecolor='black')
 
-            ax2.set_yticks(range(len(unique_chords)))
-            ax2.set_yticklabels(unique_chords)
-            ax2.set_xlabel('Time (s)')
-            ax2.set_ylabel('Chord')
-            ax2.set_title('Detected Chords as Horizontal Bars')
-            ax2.invert_yaxis()
+            ax3.set_yticks(range(len(unique_chords)))
+            ax3.set_yticklabels(unique_chords)
+            ax3.set_xlabel('Time (s)')
+            ax3.set_ylabel('Chord')
+            ax3.set_title('Detected Chords as Horizontal Bars')
+            ax3.invert_yaxis()
 
+            # Adjust layout
             self.canvas.figure.tight_layout()
             self.canvas.draw()
 
         except Exception as e:
             QMessageBox.critical(self, "Error", f"An error occurred: {e}")
+
 
 # Run
 if __name__ == '__main__':
