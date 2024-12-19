@@ -1,175 +1,215 @@
+import sys
+from PyQt5.QtWidgets import (
+    QApplication, QWidget, QPushButton, QVBoxLayout,
+    QFileDialog, QMessageBox, QLabel
+)
+from PyQt5.QtGui import QFont
+from PyQt5.QtCore import Qt
 import librosa
+import numpy as np
 import librosa.display
 import matplotlib.pyplot as plt
-import numpy as np
-from music21 import chord, stream, note
-import noisereduce as nr
+from collections import Counter
+from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 
+# Define chord templates
+def get_chord_templates():
+    notes = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
 
-def identify_major_minor_chord(note_list):
-    try:
-        # music21 ile akor nesnesi oluştur
-        c = chord.Chord(note_list)
+    major_intervals = [0, 4, 7]
+    minor_intervals = [0, 3, 7]
 
-        # Akor kalitesini kontrol et
-        if c.quality == 'major':
-            return f"{c.root().name} Major"
-        elif c.quality == 'minor':
-            return f"{c.root().name} Minor"
-        else:
-            return "Unknown"
-    except:
-        return "Unknown"
+    chords = {}
+    for i, n in enumerate(notes):
+        major_template = np.zeros(12)
+        for intv in major_intervals:
+            major_template[(i + intv) % 12] = 1
+        chords[f"{n}"] = major_template
 
+        minor_template = np.zeros(12)
+        for intv in minor_intervals:
+            minor_template[(i + intv) % 12] = 1
+        chords[f"{n}m"] = minor_template
+    return chords
 
-def get_key_music21(y, sr):
-    notes = ['C', 'C#', 'D', 'D#', 'E', 'F',
-             'F#', 'G', 'G#', 'A', 'A#', 'B']
+# Chord detection function
+def chord_detection(chroma, smoothing_window):
+    chords = get_chord_templates()
+    chord_names = list(chords.keys())
+    chord_templates = np.array([chords[ch] for ch in chord_names])
+    chord_templates = chord_templates / np.linalg.norm(chord_templates, axis=1, keepdims=True)
 
-    # Harmonik bileşeni izole et
-    y_harmonic, y_percussive = librosa.effects.hpss(y)
+    detected_chords = []
+    for frame in chroma.T:
+        similarities = chord_templates.dot(frame)
+        best_chord_index = np.argmax(similarities)
+        detected_chords.append(chord_names[best_chord_index])
 
-    # Chroma feature hesapla
-    chroma = librosa.feature.chroma_cqt(y=y_harmonic, sr=sr)
-    chroma_mean = np.mean(chroma, axis=1)
+    # Smooth chord sequence to remove rapid fluctuations
+    if len(detected_chords) > 0:
+        smoothed_chords = []
+        for i in range(len(detected_chords)):
+            start = max(0, i - smoothing_window)
+            end = min(len(detected_chords), i + smoothing_window + 1)
+            window_chords = detected_chords[start:end]
+            # Choose the most common chord in the window
+            most_common_chord = Counter(window_chords).most_common(1)[0][0]
+            smoothed_chords.append(most_common_chord)
+        detected_chords = smoothed_chords
 
-    # Enerji eşiği belirleyin ve sadece bu eşiğin üzerindeki notaları seçin
-    energy_threshold = 0.3  # Eşik değerini artırdık
-    notes_present = [notes[i] for i, energy in enumerate(chroma_mean) if energy > energy_threshold]
+    return detected_chords
 
-    # Çok fazla nota seçilmişse, sadece en yoğun birkaçını alarak süreci sadeleştirin
-    max_notes = 5  # İhtiyaca göre artırabilir veya azalt.
-    if len(notes_present) > max_notes:
-        # En yoğun notaları seçin
-        sorted_notes = sorted(zip(notes_present, chroma_mean), key=lambda x: x[1], reverse=True)
-        notes_present = [n for n, e in sorted_notes[:max_notes]]
+# Main Application Class
+class App(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.title = 'Chromagram Analysis and Chord Detection'
+        self.left = 100
+        self.top = 100
+        self.width = 900
+        self.height = 700
+        self.initUI()
 
-    if not notes_present:
-        return "Unknown", "Unknown"
+    def initUI(self):
+        self.setWindowTitle(self.title)
+        self.setGeometry(self.left, self.top, self.width, self.height)
 
-    # music21 stream oluşturun
-    s = stream.Stream()
-    for n in notes_present:
-        s.append(note.Note(n))
+        layout = QVBoxLayout()
 
-    try:
-        detected_key = s.analyze('key')
-        return detected_key.tonic.name, detected_key.mode
-    except:
-        return "Unknown", "Unknown"
+        # Load Music File Button
+        self.button = QPushButton('Load Music File', self)
+        self.button.clicked.connect(self.openFileNameDialog)
+        layout.addWidget(self.button)
 
+        # Music Name Label
+        self.music_label = QLabel("Music Name: --", self)
+        music_font = QFont()
+        music_font.setBold(True)
+        music_font.setPointSize(12)  # Adjust font size as needed
+        self.music_label.setFont(music_font)
+        self.music_label.setAlignment(Qt.AlignCenter)  # Center the text
+        layout.addWidget(self.music_label)
 
-def reduce_noise(y, sr):
-    """
-    Gürültüyü azaltmak için noisereduce kütüphanesini kullanır.
-    """
-    # İlk birkaç saniyeyi gürültü profili olarak kullanın
-    noise_clip = y[:int(sr * 0.5)]
-    y_denoised = nr.reduce_noise(y=y, sr=sr, y_noise=noise_clip, prop_decrease=1.0)
-    return y_denoised
+        # BPM Label
+        self.bpm_label = QLabel("BPM: --", self)
+        bpm_font = QFont()
+        bpm_font.setBold(True)
+        bpm_font.setPointSize(12)  # Adjust font size as needed
+        self.bpm_label.setFont(bpm_font)
+        self.bpm_label.setAlignment(Qt.AlignCenter)  # Center the text
+        layout.addWidget(self.bpm_label)
 
+        # Matplotlib Canvas for Plotting
+        self.canvas = FigureCanvas(plt.Figure(figsize=(10, 8)))
+        layout.addWidget(self.canvas)
 
-# Audio dosyasını yükle
-file_path = 'yoklugundaV2.wav'  # Kendi dosya yolunuzu kullanın
-y, sr = librosa.load(file_path, sr=None)
+        self.setLayout(layout)
+        self.show()
 
-# Gürültüyü azalt
-y = reduce_noise(y, sr)
+    def openFileNameDialog(self):
+        options = QFileDialog.Options()
+        fileName, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select Music File",
+            "",
+            "WAV Files (*.wav);;All Files (*)",
+            options=options
+        )
+        if fileName:
+            self.process_audio(fileName)
 
-# Normalize et
-y = librosa.util.normalize(y)
+    def process_audio(self, file_path):
+        try:
+            # Update Music Name Label
+            import os
+            music_name = os.path.basename(file_path)
+            self.music_label.setText(f"Music Name: <b>{music_name}</b>")
 
-# Tempo ve beat analizini yap
-tempo, beat_frames = librosa.beat.beat_track(y=y, sr=sr)
+            # Load audio file
+            measurements, sample_rate = librosa.load(file_path, sr=44100, mono=True)
 
-# Tempo değerinin skaler olduğunu doğrula
-if isinstance(tempo, np.ndarray):
-    tempo = tempo.item()
+            # Load again for BPM detection with original sample rate
+            a, b = librosa.load(file_path, sr=None)
+            bpm, _ = librosa.beat.beat_track(y=a, sr=b)
+            if isinstance(bpm, np.ndarray):
+                bpm = bpm.item()
+            print("Estimated tempo (BPM):", bpm)
 
-print(f"BPM: {int(tempo)}")
+            # Update BPM Label
+            self.bpm_label.setText(f"BPM: <b>{int(bpm)}</b>")
 
-# Tonalite analizi
-tonic, mode = get_key_music21(y, sr)
-print(f"Detected Key: {tonic} {mode}")
+            # Chromagram Calculation
+            hop_length = 512
+            chroma = librosa.feature.chroma_cqt(y=measurements, sr=sample_rate, hop_length=hop_length)
+            chroma = chroma / (np.linalg.norm(chroma, axis=0, keepdims=True) + 1e-9)
+            chroma = np.apply_along_axis(
+                lambda x: np.convolve(x, np.ones(5) / 5, mode='same'),
+                axis=1,
+                arr=chroma
+            )
+            frames_per_second = sample_rate / hop_length
+            frames_per_beat = int(frames_per_second * (60.0 / bpm))
+            detected_chords = chord_detection(chroma, frames_per_beat)
 
-# Harmonik bileşeni izole et ve chroma hesapla
-y_harmonic, y_percussive = librosa.effects.hpss(y)
-chroma = librosa.feature.chroma_cqt(y=y_harmonic, sr=sr, hop_length=512)  # win_length kaldırıldı
+            # Time Conversion
+            times = librosa.frames_to_time(np.arange(chroma.shape[1]), sr=sample_rate)
+            chord_changes = []
+            if len(detected_chords) > 0:
+                current_chord = detected_chords[0]
+                start_time = times[0]
+                for i in range(1, len(detected_chords)):
+                    if detected_chords[i] != current_chord:
+                        end_time = times[i]
+                        chord_changes.append((current_chord, start_time, end_time))
+                        current_chord = detected_chords[i]
+                        start_time = times[i]
+                end_time = times[-1]
+                chord_changes.append((current_chord, start_time, end_time))
 
-# Chroma indekslerini nota isimlerine eşleştir
-notes = ['C', 'C#', 'D', 'D#', 'E', 'F',
-         'F#', 'G', 'G#', 'A', 'A#', 'B']
+            unique_chords = list(dict.fromkeys(detected_chords))
+            chord_to_y = {ch: i for i, ch in enumerate(unique_chords)}
 
-# Her notanın genel yoğunluğunu hesapla
-note_intensities = np.sum(chroma, axis=1)
+            # Clear the previous plot
+            self.canvas.figure.clf()
 
-# En yoğun 3 notayı bul
-top_3_notes_idx = np.argsort(note_intensities)[-3:][::-1]
-top_3_notes = [notes[i] for i in top_3_notes_idx]
-print(f"Most intense 3 notes: {top_3_notes}")
+            # Plot Chromagram
+            ax1 = self.canvas.figure.add_subplot(2, 1, 1)
+            librosa.display.specshow(
+                chroma,
+                x_axis='time',
+                y_axis='chroma',
+                sr=sample_rate,
+                cmap='coolwarm',
+                ax=ax1
+            )
+            ax1.set_title('Chroma Representation')
+            ax1.set_yticks(np.arange(12))
+            ax1.set_yticklabels(['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'])
 
-# Her saniye için en yoğun 3 notayı belirle
-duration = librosa.get_duration(y=y, sr=sr)
-time_bins = np.arange(0, duration, 1.0)
-frames_per_second = librosa.time_to_frames(time_bins, sr=sr, hop_length=512)
-top_notes_per_second = []
+            # Plot Chord Segments
+            ax2 = self.canvas.figure.add_subplot(2, 1, 2, sharex=ax1)
+            cmap = plt.get_cmap('tab20')
+            for chord, start, end in chord_changes:
+                y_pos = chord_to_y[chord]
+                duration = end - start
+                color = cmap(y_pos % cmap.N)
+                ax2.barh(y_pos, duration, left=start, height=0.6, color=color, edgecolor='black')
 
-for i in range(len(frames_per_second) - 1):
-    start_frame = frames_per_second[i]
-    end_frame = frames_per_second[i + 1]
-    if end_frame > chroma.shape[1]:
-        end_frame = chroma.shape[1]
-    chroma_slice = chroma[:, start_frame:end_frame]
-    mean_chroma = np.mean(chroma_slice, axis=1)
-    top_notes_idx = np.argsort(mean_chroma)[-3:][::-1]  # 3 nota seç
-    top_notes = [notes[idx] for idx in top_notes_idx]
-    top_notes_per_second.append(top_notes)
+            ax2.set_yticks(range(len(unique_chords)))
+            ax2.set_yticklabels(unique_chords)
+            ax2.set_xlabel('Time (s)')
+            ax2.set_ylabel('Chord')
+            ax2.set_title('Detected Chords as Horizontal Bars')
+            ax2.invert_yaxis()
 
-# Akor isimlerini belirle
-chords_per_second = []
-for top_notes in top_notes_per_second:
-    chord_name = identify_major_minor_chord(top_notes)
-    chords_per_second.append(chord_name)
+            self.canvas.figure.tight_layout()
+            self.canvas.draw()
 
-# Chord Chromagram oluştur
-chord_chromagram = np.zeros_like(chroma)
-for i in range(len(frames_per_second) - 1):
-    start_frame = frames_per_second[i]
-    end_frame = frames_per_second[i + 1]
-    if end_frame > chroma.shape[1]:
-        end_frame = chroma.shape[1]
-    top_notes_idx = [notes.index(n) for n in top_notes_per_second[i] if n in notes]
-    for idx in top_notes_idx:
-        chord_chromagram[idx, start_frame:end_frame] = chroma[idx, start_frame:end_frame]
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"An error occurred: {e}")
 
-# Görselleştirme
-plt.figure(figsize=(14, 8))
-
-# Subplot 1: Waveform
-plt.subplot(3, 1, 1)
-librosa.display.waveshow(y, sr=sr, alpha=0.8, color='grey')
-plt.title(f'Waveform of "{file_path}"', fontsize=16)
-plt.xlabel('Time (s)', fontsize=14)
-plt.ylabel('Amplitude', fontsize=14)
-
-
-# Subplot 2: Chord Chromagram
-plt.subplot(3, 1, 2)
-librosa.display.specshow(chord_chromagram, x_axis='time', y_axis='chroma', cmap='coolwarm', sr=sr, hop_length=512)
-cbar = plt.colorbar()
-cbar.set_ticks([])
-cbar.set_label('Density', fontsize=16)
-plt.title('Chord Chromagram (Top 3 Notes per Second)', fontsize=16)
-
-
-
-plt.tight_layout()
-plt.show()
-
-print("\nMost intense 3 notes overall:")
-print(top_3_notes)
-
-print("\nTop 3 most played notes per second and chords formed:")
-for i, (top_notes, chord_name) in enumerate(zip(top_notes_per_second, chords_per_second)):
-    time_sec = i
-    print(f"Second {time_sec}-{time_sec + 1}: Top notes: {top_notes}, Chord: {chord_name}")
+# Run
+if __name__ == '__main__':
+    app = QApplication(sys.argv)
+    ex = App()
+    sys.exit(app.exec_())
