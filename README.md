@@ -12,4 +12,10 @@ notes in a chromagram and lastly, detected chords in horizontal bars according t
 
 ![chordrecognition_result](https://github.com/user-attachments/assets/2fcfb4a7-2ff3-4ebb-8482-70a0d040ae60)
 
+The program also has an export chords option where it can export the detected chords in corresponding time intervals (from start time to end time) in either .txt or .csv
+format, in an annotated manner.
+
+![chordrecognition_csv](https://github.com/user-attachments/assets/5f598419-8148-4b2e-a95e-bf0e0d99d479)
+
+
 
