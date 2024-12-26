@@ -1,4 +1,4 @@
-# CENG327 - Chord Analysis in Musical Signals #
+# CENG327 Group 9 - Chord Analysis in Musical Signals #
 This is a chord recognition project, coded in Python for the CENG327 Scientific Computing course. The project utilizes signal processing algorithms and
 many Python libraries.
 1. Librosa was used for loading and processing sound files and also for signal proccessing operations.
